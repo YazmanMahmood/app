@@ -1,0 +1,6 @@
+flask==2.0.1
+flask-cors==3.0.10
+websockets==10.3
+opencv-python==4.7.0
+pymavlink==2.4.37
+sqlite3==3.35.4
