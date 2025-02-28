@@ -1,6 +1,21 @@
-flask==2.0.1
-flask-cors==3.0.10
+# Core Dependencies
+Flask==2.0.2
+Werkzeug==2.0.2
+Flask-CORS==3.0.10
+requests==2.31.0
 websockets==10.3
 opencv-python==4.7.0
 pymavlink==2.4.37
-sqlite3==3.35.4
+numpy==1.21.2
+
+# Web Framework Dependencies
+click==7.1.2
+Jinja2==3.0.1
+itsdangerous==2.0.1
+markupsafe==2.0.1
+
+# Utilities
+python-dotenv==0.19.0
+
+# Optional: Computer Vision (install if needed)
+# opencv-python==4.7.0

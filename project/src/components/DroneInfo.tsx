@@ -100,7 +100,7 @@ const DroneInfo: React.FC<DroneInfoProps> = ({ info }) => {
     },
     {
       icon: <Home className="text-blue-500" />,
-      label: 'Landing Station',
+      label: 'Docking Station',
       value: metrics.LandingStation,
       color: metrics.LandingStation === 'Open' ? 'text-green-500' : 'text-yellow-500'
     }

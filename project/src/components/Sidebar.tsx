@@ -1,13 +1,14 @@
 import { NavLink } from 'react-router-dom';
-import { Bone as Drone, MapPin, Settings, Camera, Menu, Play } from 'lucide-react';
+import { Bone as Drone, MapPin, Settings, Camera, Menu, Play, FileText } from 'lucide-react';
 
 function Sidebar() {
   const menuItems = [
     { icon: Drone, text: 'Mission Planner', path: '/mission-planner' },
     { icon: MapPin, text: 'Sites', path: '/sites' },
     { icon: Camera, text: 'Drone View', path: '/camera' },
+    { icon: FileText, text: 'Flight Logs', path: '/flight-logs' },
     { icon: Settings, text: 'Settings', path: '/settings' },
-    { icon: Play, text: 'Demo Mission', path: '/demo-mission' },
+    // { icon: Play, text: 'Demo Mission', path: '/demo-mission' },
   ];
 
   return (

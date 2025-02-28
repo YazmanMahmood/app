@@ -6,6 +6,7 @@ import Sites from './pages/Sites';
 import WebcamComponent from './components/WebcamComponents'; // Import the WebcamComponent
 import CameraView from './pages/CameraView'; // Import the CameraView
 import DemoMission from './pages/DemoMission';
+import FlightLogs from './pages/FlightLogs';
 
 function App() {
   return (
@@ -22,6 +23,7 @@ function App() {
             {/* Add a new route for the camera view */}
             <Route path="/camera" element={<CameraView />} />
             <Route path="/demo-mission" element={<DemoMission />} />
+            <Route path="/flight-logs" element={<FlightLogs />} />
           </Routes>
         </main>
       </div>

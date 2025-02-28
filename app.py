@@ -16,12 +16,14 @@ import websockets
 import json
 import random
 from typing import Optional
-from flask import Flask, Response
+from flask import Flask, Response, jsonify
 from pymavlink import mavutil
 import cv2
 import numpy as np
 import sys
 import re
+from flask_cors import CORS
+import base64
 
 # Logging configuration
 logging.basicConfig(
@@ -36,13 +38,15 @@ logger = logging.getLogger(__name__)
 
 # Global state variables
 DRONE_STATE = {
-    'Battery': 100,
+    'Battery': 75,
     'Status': 'Connected',
     'Altitude': 0,
     'Signal': 100,
     'Speed': 0,
-    'Heading': 0,
-    'LandingStation': 'Closed'
+    'Heading': 76,
+    'Location': [0, 0],
+    'HomeLocation': [0, 0],
+    'LandingStation': 'open'
 }
 
 class DroneController:
@@ -91,25 +95,12 @@ class DroneController:
             mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,
             0, 0, 0, 0, 0, 0, 0, 0)
 
-async def update_drone_state():
-    """Update drone state with random values"""
-    while True:
-        DRONE_STATE.update({
-            'Battery': max(0, min(100, DRONE_STATE['Battery'] + random.randint(-5, 3))),
-            'Altitude': max(0, min(100, DRONE_STATE['Altitude'] + random.randint(-2, 2))),
-            'Signal': max(0, min(100, DRONE_STATE['Signal'] + random.randint(-10, 10))),
-            'Speed': max(0, min(30, DRONE_STATE['Speed'] + random.randint(-3, 3))),
-            'Heading': (DRONE_STATE['Heading'] + random.randint(-10, 10)) % 360,
-            'LandingStation': random.choice(['Open', 'Closed'])
-        })
-        await asyncio.sleep(1)
-
 async def websocket_handler(websocket):
     """Handle WebSocket connections"""
     try:
         logger.info(f"New client connected from {websocket.remote_address}")
         while True:
-            # Send current drone state
+            # Just send the static state
             await websocket.send(json.dumps(DRONE_STATE))
             await asyncio.sleep(1)
     except websockets.exceptions.ConnectionClosed:
@@ -148,32 +139,100 @@ class DroneSystem:
         self.update_interval = 1
         self.logger = logging.getLogger(__name__)
         self.app = Flask(__name__)
+        CORS(self.app, resources={
+            r"/*": {
+                "origins": "*",
+                "methods": ["GET", "POST", "OPTIONS"],
+                "allow_headers": ["Content-Type"]
+            }
+        })
         self.setup_routes()
-        self.rtsp_url = 'rtsp://admin:admin123456@192.168.167.234:8554/profile0?tcp'
+        self.rtsp_url = 'rtsp://admin:admin123456@192.168.27.234:8554/profile0'
         self.flask_server = None
         self.clients = set()
 
     def setup_routes(self):
         """Setup Flask routes"""
+        @self.app.route('/health')
+        def health_check():
+            """Health check endpoint"""
+            return {'status': 'ok'}
+
         @self.app.route('/video_feed')
         def video_feed():
-            return Response(self.generate_frames(),
-                          mimetype='multipart/x-mixed-replace; boundary=frame')
+            """Video streaming route"""
+            return Response(
+                self.generate_frames(),
+                mimetype='multipart/x-mixed-replace; boundary=frame',
+                headers={
+                    'Cache-Control': 'no-cache',
+                    'Access-Control-Allow-Origin': '*'
+                }
+            )
+
+        @self.app.route('/api/drone-status')
+        def get_drone_status():
+            return jsonify(DRONE_STATE)
+
+        @self.app.route('/api/ws-port')
+        def get_ws_port():
+            return jsonify({'port': 5678})
 
     def generate_frames(self):
         """Generate camera frames"""
-        cap = cv2.VideoCapture(self.rtsp_url)
+        frame_received = False
         while True:
-            success, frame = cap.read()
-            if not success:
-                break
-            else:
-                # Encode frame to JPEG
+            try:
+                cap = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 3)
+                
+                if not cap.isOpened():
+                    logger.error("Failed to open RTSP stream")
+                    time.sleep(1)
+                    continue
+
+                while True:
+                    ret, frame = cap.read()
+                    if not ret:
+                        if not frame_received:
+                            logger.error("No video frames received")
+                            # Return a black frame with "No Video Signal" text
+                            frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                            cv2.putText(frame, 
+                                      "No Video Signal", 
+                                      (160, 240),
+                                      cv2.FONT_HERSHEY_SIMPLEX, 
+                                      1.5,
+                                      (255, 255, 255),
+                                      2)
+                        break
+
+                    frame_received = True
+                    frame = cv2.resize(frame, (640, 480))
+                    ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                    frame_bytes = buffer.tobytes()
+                    yield (b'--frame\r\n'
+                           b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+
+            except Exception as e:
+                logger.error(f"Camera error: {e}")
+                # Create a black frame with error message
+                frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                cv2.putText(frame, 
+                          "Camera Error", 
+                          (200, 240),
+                          cv2.FONT_HERSHEY_SIMPLEX, 
+                          1.5,
+                          (255, 255, 255),
+                          2)
                 ret, buffer = cv2.imencode('.jpg', frame)
-                frame = buffer.tobytes()
+                frame_bytes = buffer.tobytes()
                 yield (b'--frame\r\n'
-                       b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
-        cap.release()
+                       b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+                time.sleep(1)
+            finally:
+                if 'cap' in locals():
+                    cap.release()
 
     def find_available_web_port(self) -> Optional[int]:
         """Find an available port for the web application."""
@@ -220,9 +279,13 @@ class DroneSystem:
 
             logger.info("Build completed successfully")
 
-            # Start Flask server in a separate thread
-            threading.Thread(target=lambda: self.app.run(host='0.0.0.0', port=5000, threaded=True), daemon=True).start()
-            logger.info("Flask server started on port 5000")
+            # Start Flask server for video stream
+            self.flask_server = threading.Thread(
+                target=lambda: self.app.run(host='0.0.0.0', port=5000, threaded=True),
+                daemon=True
+            )
+            self.flask_server.start()
+            logger.info("Flask video server started on port 5000")
 
             # Start the web app with specified port
             logger.info(f"Starting development server on port {self.port}...")
@@ -347,12 +410,48 @@ class DroneSystem:
                 continue
         return False
 
+    def check_flask_server(self) -> bool:
+        """Check if Flask server is running and accessible"""
+        try:
+            response = requests.get('http://localhost:5000/test_camera')
+            return response.status_code == 200
+        except requests.exceptions.ConnectionError:
+            return False
+
+    def wait_for_flask_server(self, timeout: int = 30) -> bool:
+        """Wait for Flask server to become available"""
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            if self.check_flask_server():
+                logger.info("Flask server is running and accessible")
+                return True
+            time.sleep(1)
+        logger.error("Timeout waiting for Flask server")
+        return False
+
     def start_flask_server(self):
         """Start Flask server"""
         try:
-            self.app.run(host='0.0.0.0', port=5000, threaded=True)
+            # Kill any process using port 5000
+            if os.name == 'nt':  # Windows
+                os.system(f'netstat -ano | findstr :5000 > NUL && FOR /F "tokens=5" %a in (\'netstat -ano ^| findstr :5000\') do taskkill /F /PID %a')
+            else:  # Linux/Mac
+                os.system('fuser -k 5000/tcp >/dev/null 2>&1')
+
+            logger.info("Starting Flask server on port 5000...")
+            
+            # Start Flask without debug mode and threading
+            self.app.run(
+                host='0.0.0.0',
+                port=5000,
+                debug=False,
+                use_reloader=False,
+                threaded=True
+            )
+            return True
         except Exception as e:
             logger.error(f"Flask server error: {e}")
+            return False
 
     async def websocket_handler(self, websocket):
         """Handle WebSocket connections"""
@@ -380,17 +479,20 @@ class DroneSystem:
     async def run(self):
         """Main execution flow."""
         try:
-            if not self.start_web_app():
-                logger.error("Failed to start web application")
-                return
-
-            # Start Flask server in a separate thread
+            # Start Flask server first
             self.flask_server = threading.Thread(
                 target=self.start_flask_server,
                 daemon=True
             )
             self.flask_server.start()
-            logger.info("Flask server started on port 5000")
+            
+            # Wait for Flask server to start
+            time.sleep(2)
+
+            # Start web application
+            if not self.start_web_app():
+                logger.error("Failed to start web application")
+                return
 
             # Find available WebSocket port
             if not await self.find_available_port():
@@ -400,9 +502,6 @@ class DroneSystem:
 
             # Create stop event
             self._stop_event = asyncio.Event()
-            
-            # Start the state update task
-            update_task = asyncio.create_task(update_drone_state())
             
             # Start WebSocket server
             async with websockets.serve(self.websocket_handler, "localhost", self.websocket_port) as server:
@@ -418,8 +517,6 @@ class DroneSystem:
                 except asyncio.CancelledError:
                     logger.info("Received cancellation signal")
                 finally:
-                    # Clean shutdown
-                    update_task.cancel()
                     server.close()
                     await server.wait_closed()
                     logger.info("WebSocket server shut down cleanly")
@@ -455,4 +552,3 @@ def main():
 if __name__ == "__main__":
     ensure_directories()
     main()
-

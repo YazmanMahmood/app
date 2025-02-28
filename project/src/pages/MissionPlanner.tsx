@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, Polyline } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, Polyline, LayersControl } from 'react-leaflet';
 import { Route, Lock, MapPin, Play, Pause, Edit2, Trash2 } from 'lucide-react';
 import DroneInfo from '../components/DroneInfo';
 import { MissionForm } from '../components/MissionForm';
@@ -8,10 +8,13 @@ import { MapController } from '../components/map/MapController';
 import { MapClickHandler } from '../components/map/MapClickHandler';
 import { startIcon, endIcon, waypointIcon, locationIcon } from '../components/map/CustomMarkers';
 import { SiteSelector, Site } from '../components/SiteSelector';
+
 import { sites } from '../data/sites';
 import { CoordinateInput } from '../components/CoordinateInput';
 import { Mission } from '../types/mission';
 import { getWaypointLabel } from '../utils/coordinates';
+import WaypointMarker from '../components/WaypointMarker';
+import '../styles/waypoints.css';
 
 interface Waypoint {
   coordinates: [number, number];
@@ -51,7 +54,12 @@ const saveWaypointsToFile = (waypoints: LocalWaypoint[]) => {
 
 const DEFAULT_ZOOM = 18;
 const DEFAULT_HEIGHT = 5;
-const POLYLINE_OPTIONS = { color: '#3b82f6', weight: 2, opacity: 0.8 };
+const POLYLINE_OPTIONS = { 
+  color: '#00ff00', // Bright green for better visibility on satellite
+  weight: 3,
+  opacity: 0.8,
+  dashArray: '5, 10' // Makes the line dashed
+};
 
 interface DroneState {
   Battery: number;
@@ -62,17 +70,19 @@ interface DroneState {
   Heading: number;
   Location: [number, number];
   HomeLocation: [number, number];
+  LandingStation: string;
 }
 
 const initialDroneState: DroneState = {
-  Battery: 0,
-  Status: 'Disconnected',
+  Battery: 75,
+  Status: 'Connected',
   Altitude: 0,
-  Signal: 0,
+  Signal: 100,
   Speed: 0,
-  Heading: 0,
+  Heading: 76,
   Location: [0, 0],
-  HomeLocation: [0, 0]
+  HomeLocation: [0, 0],
+  LandingStation: 'open'
 };
 
 // Update the WaypointAction interface
@@ -133,6 +143,10 @@ const MAX_RETRIES = 3;
 
 // Removed redundant fetchWsPort function
 
+// Add these constants at the top with your other constants
+const MAPBOX_TOKEN = 'your_mapbox_token'; // You'll need to get a token from Mapbox
+const GOOGLE_MAPS_API_KEY = 'your_google_maps_api_key'; // Or get a Google Maps API key
+
 const MissionPlanner: React.FC = () => {
   // Initialize states with safe defaults
   const [selectedSite, setSelectedSite] = useState<Site>(sites[0] || {
@@ -160,15 +174,10 @@ const MissionPlanner: React.FC = () => {
   const [showMissionForm, setShowMissionForm] = useState(false);
   const [editingMissionId, setEditingMissionId] = useState<string | null>(null);
   const [userLocation, setUserLocation] = useState<[number, number] | null>(null);
-  const [droneState, setDroneState] = useState<DroneState>(initialDroneState);
+  const [droneState] = useState<DroneState>(initialDroneState);
   const [locationError, setLocationError] = useState<string | null>(null);
-  const [wsPort, setWsPort] = useState<number | null>(null);
   const mapRef = useRef(null);
-  const [wsRetries, setWsRetries] = useState(0);
-  const wsRef = useRef<WebSocket | null>(null);
-  const reconnectTimeoutRef = useRef<NodeJS.Timeout>();
-  const [error] = useState<string | null>(null);
-  const [wsConnected, setWsConnected] = useState(false);
+  const [wsConnected] = useState(true);
 
   useEffect(() => {
     if (navigator.geolocation) {
@@ -190,115 +199,16 @@ const MissionPlanner: React.FC = () => {
     }
   }, []);
 
-  // Fetch WebSocket port from backend
-  useEffect(() => {
-    const fetchWsPort = async () => {
-      try {
-        const response = await fetch('/api/ws-port');
-        const data = await response.json();
-        setWsPort(data.port);
-      } catch (error) {
-        console.error('Error fetching WebSocket port:', error);
-      }
-    };
-    fetchWsPort();
-  }, []);
-
-  // WebSocket connection with dynamic port
-  useEffect(() => {
-    if (!wsPort) return;
-
-    const connectWebSocket = () => {
-      try {
-        if (wsRef.current?.readyState === WebSocket.OPEN) {
-          return;
-        }
-
-        wsRef.current = new WebSocket(`ws://localhost:${wsPort}`);
-        
-        wsRef.current.onopen = () => {
-          console.log('WebSocket connected');
-          setWsConnected(true);
-          setWsRetries(0);
-          setDroneState(prev => ({ ...prev, Status: 'Connected' }));
-        };
-
-        wsRef.current.onmessage = (event) => {
-          try {
-            const data = JSON.parse(event.data);
-            setDroneState(prev => ({
-              ...prev,
-              ...data,
-              Location: data.Location || prev.Location,
-              HomeLocation: data.HomeLocation || prev.HomeLocation
-            }));
-          } catch (error) {
-            console.error('Error parsing drone data:', error);
-          }
-        };
-
-        wsRef.current.onclose = () => {
-          console.log('WebSocket disconnected');
-          setWsConnected(false);
-          setDroneState(prev => ({ ...prev, Status: 'Disconnected' }));
-          
-          // Attempt reconnection if under max retries
-          if (wsRetries < MAX_RETRIES) {
-            reconnectTimeoutRef.current = setTimeout(() => {
-              setWsRetries(prev => prev + 1);
-              connectWebSocket();
-            }, WS_RETRY_INTERVAL);
-          }
-        };
-
-        wsRef.current.onerror = (error) => {
-          console.error('WebSocket error:', error);
-          setDroneState(prev => ({ ...prev, Status: 'Error' }));
-        };
-
-      } catch (error) {
-        console.error('WebSocket connection error:', error);
-      }
-    };
-
-    connectWebSocket();
-
-    // Cleanup function
-    return () => {
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
-      }
-      if (wsRef.current) {
-        wsRef.current.close();
-        wsRef.current = null;
-      }
-    };
-  }, [wsPort, wsRetries]);
-
-  // Add window unload handler
-  useEffect(() => {
-    const handleUnload = () => {
-      if (wsRef.current) {
-        wsRef.current.close();
-      }
-    };
-
-    window.addEventListener('beforeunload', handleUnload);
-    return () => window.removeEventListener('beforeunload', handleUnload);
-  }, []);
-
   const waypointPositions = waypoints.map(wp => wp.coordinates);
 
   const handleNewMissionClick = () => {
-    setMissionCreationStep('selecting-waypoints');
-    setShowMissionForm(true);
-    setIsSettingWaypoints(true);
     setWaypoints([]);
-    setEditingMissionId(null);
-    setIsMapLocked(false);
+    setMissionCreationStep('selecting-waypoints');
+    setIsSettingWaypoints(true);
+    setShowMissionForm(true);
+    setIsMapLocked(true);
   };
 
-  // Update the handleWaypointSelect function
   const handleWaypointSelect = (lat: number, lng: number) => {
     if (isSettingWaypoints) {
       const newWaypoint: LocalWaypoint = {
@@ -306,18 +216,31 @@ const MissionPlanner: React.FC = () => {
         coordinates: [lat, lng],
         altitude: DEFAULT_HEIGHT,
         action: {
-          type: 'waypoint' // Set default action type
+          type: 'waypoint'
         },
-        position: [lat, lng], // Add the position property
-        order: 0,
-        label: `Waypoint ${waypoints.length + 1}`
+        position: [lat, lng],
+        order: waypoints.length + 1,
+        label: `${waypoints.length + 1}`
       };
       setWaypoints(prev => [...prev, newWaypoint]);
     }
   };
 
-  const handleWaypointDoubleClick = (waypointId: string) => {
-    setWaypoints(prev => prev.filter(wp => wp.id !== waypointId));
+  const handleWaypointDelete = (id: string, showConfirm = false) => {
+    if (missionCreationStep === 'idle') return;
+
+    const waypointIndex = waypoints.findIndex(wp => wp.id === id);
+    
+    if (waypointIndex === 0) return;
+
+    setWaypoints(prev => {
+      const newWaypoints = prev.filter(wp => wp.id !== id);
+      return newWaypoints.map((wp, index) => ({
+        ...wp,
+        order: index + 1,
+        label: `${index + 1}`
+      }));
+    });
   };
 
   const handleHeightChange = (waypointId: string, altitude: number) => {
@@ -326,7 +249,6 @@ const MissionPlanner: React.FC = () => {
     ));
   };
 
-  // Update handleCoordinateChange to include action
   const handleCoordinateChange = (waypointId: string, lat: number, lng: number, height: number, action: WaypointAction) => {
     setWaypoints(prev => prev.map(wp => 
       wp.id === waypointId ? { ...wp, coordinates: [lat, lng], altitude: height, action } : wp
@@ -335,16 +257,14 @@ const MissionPlanner: React.FC = () => {
 
   const handleWaypointsComplete = () => {
     if (waypoints.length < 2) {
-      alert('Please add at least 2 waypoints');
+      alert('Please add at least 2 waypoints to create a mission');
       return;
     }
     setIsSettingWaypoints(false);
     setMissionCreationStep('mission-details');
-    setShowMissionForm(true);
-    setIsMapLocked(true);
+    setIsMapLocked(false);
   };
 
-  // Update mission submission with null checks
   const handleMissionSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     
@@ -367,7 +287,6 @@ const MissionPlanner: React.FC = () => {
         status: 'pending'
       };
 
-      // Update missions state safely
       setMissions(prev => {
         const newMissions = editingMissionId 
           ? prev.map(m => m.id === editingMissionId ? missionData : m)
@@ -377,7 +296,6 @@ const MissionPlanner: React.FC = () => {
 
       saveWaypointsToFile(waypoints);
 
-      // Reset states
       setWaypoints([]);
       setMissionForm({ name: '', date: '', time: '' });
       setMissionCreationStep('idle');
@@ -447,17 +365,41 @@ const MissionPlanner: React.FC = () => {
     }
   };
 
+  const handleWaypointDragEnd = (id: string, newCoords: [number, number]) => {
+    setWaypoints(prev => prev.map(wp => {
+      if (wp.id === id) {
+        return {
+          ...wp,
+          coordinates: newCoords,
+          position: newCoords,
+          label: `${wp.order}`
+        };
+      }
+      return wp;
+    }));
+  };
+
+  const validateMission = () => {
+    if (waypoints.length < 2) {
+      alert('A valid mission requires at least 2 waypoints');
+      return false;
+    }
+    return true;
+  };
+
+  const handleMissionComplete = () => {
+    if (!validateMission()) return;
+    
+    // Rest of your mission completion logic
+    // ...
+  };
+
   return (
     <MissionErrorBoundary>
-      <div className="p-2 sm:p-6 h-full">
+      <div className="h-screen flex flex-col p-2 sm:p-6">
         {locationError && (
           <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative mb-4">
             <span className="block sm:inline">{locationError}</span>
-          </div>
-        )}
-        {error && (
-          <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative mb-4">
-            {error}
           </div>
         )}
         <div className="flex items-center justify-between mb-4">
@@ -473,224 +415,237 @@ const MissionPlanner: React.FC = () => {
           />
         </div>
   
-        <div className="grid grid-rows-[auto_1fr] gap-4 sm:gap-6 h-full">
-          <DroneInfo info={{
-            speed: droneState.Speed,
-            heading: droneState.Heading
-          }} />
+        <DroneInfo info={{
+          speed: droneState.Speed,
+          heading: droneState.Heading
+        }} />
   
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-6">
-            <div className="lg:col-span-9 order-2 lg:order-1">
-              <div className="bg-gray-800 rounded-lg p-2 sm:p-4 h-[60vh] lg:h-full">
-                <div className="h-full rounded-lg overflow-hidden relative">
-                  <MapContainer
-                    ref={mapRef}
-                    center={selectedSite.coordinates}
-                    zoom={DEFAULT_ZOOM}
-                    style={{ height: '100%', width: '100%' }}
+        <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-6 min-h-0">
+          <div className="lg:col-span-9 order-2 lg:order-1 h-full">
+            <div className="bg-gray-800 rounded-lg p-2 sm:p-4 h-full">
+              <div className="h-full rounded-lg overflow-hidden relative shadow-xl">
+                <MapContainer
+                  ref={mapRef}
+                  center={selectedSite.coordinates}
+                  zoom={DEFAULT_ZOOM}
+                  style={{ height: '100%', width: '100%' }}
+                  className="map-satellite"
+                >
+                  <MapController isLocked={isMapLocked} />
+                  
+                  <LayersControl position="topright">
+                    <LayersControl.BaseLayer checked name="Satellite">
+                      <TileLayer
+                        attribution='&copy; <a href="https://www.esri.com/">Esri</a>'
+                        url='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
+                        maxZoom={19}
+                      />
+                    </LayersControl.BaseLayer>
+                    
+                    <LayersControl.BaseLayer name="Street">
+                      <TileLayer
+                        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                      />
+                    </LayersControl.BaseLayer>
+                    
+                    <LayersControl.BaseLayer name="Terrain">
+                      <TileLayer
+                        attribution='&copy; <a href="https://www.esri.com/">Esri</a>'
+                        url='https://server.arcgisonline.com/ArcGIS/rest/services/World_Terrain_Base/MapServer/tile/{z}/{y}/{x}'
+                        maxZoom={19}
+                      />
+                    </LayersControl.BaseLayer>
+                  </LayersControl>
+
+                  <MapClickHandler 
+                    onPointSelect={handleWaypointSelect}
+                    isActive={isSettingWaypoints}
+                  />
+                  
+                  {waypointPositions.length > 1 && (
+                    <Polyline positions={waypointPositions} pathOptions={POLYLINE_OPTIONS} />
+                  )}
+                  
+                  {waypoints.map((waypoint, index) => (
+                    <WaypointMarker
+                      key={waypoint.id}
+                      id={waypoint.id}
+                      index={index}
+                      coordinates={waypoint.coordinates}
+                      altitude={waypoint.altitude}
+                      action={waypoint.action}
+                      onHeightChange={(height) => handleHeightChange(waypoint.id, height)}
+                      onDelete={() => handleWaypointDelete(waypoint.id)}
+                      onDragEnd={handleWaypointDragEnd}
+                      isDraggable={true}
+                    />
+                  ))}
+  
+                  {userLocation && (
+                    <Marker position={userLocation} icon={locationIcon}>
+                      <Popup>Your Location</Popup>
+                    </Marker>
+                  )}
+                </MapContainer>
+  
+                <div className="absolute top-4 right-4 z-[1000] space-y-2">
+                  <button
+                    onClick={() => setIsMapLocked(!isMapLocked)}
+                    className={`${
+                      isMapLocked ? 'bg-red-600 hover:bg-red-700' : 'bg-blue-600 hover:bg-blue-700'
+                    } text-white p-2 rounded-lg flex items-center gap-2 w-full`}
                   >
-                    <MapController isLocked={isMapLocked} />
-                    <TileLayer
-                      attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-                      url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-                    />
-                    <MapClickHandler 
-                      onPointSelect={handleWaypointSelect}
-                      isActive={isSettingWaypoints}
-                    />
-                    
-                    {waypointPositions.length > 1 && (
-                      <Polyline positions={waypointPositions} pathOptions={POLYLINE_OPTIONS} />
-                    )}
-                    
-                    {waypoints.map((waypoint, index) => (
-                      <Marker 
-                        key={waypoint.id} 
-                        position={waypoint.coordinates} 
-                        icon={index === 0 ? startIcon : index === waypoints.length - 1 ? endIcon : waypointIcon}
-                        eventHandlers={{
-                          dblclick: () => handleWaypointDoubleClick(waypoint.id)
-                        }}
-                      >
-                        <Popup>
-                          <div className="p-2">
-                            <div className="font-bold text-lg mb-2">Waypoint {getWaypointLabel(index)}</div>
-                            <div className="text-sm text-gray-600 mb-2">
-                              {formatCoordinates(waypoint.coordinates[0], waypoint.coordinates[1])}
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <label className="text-sm">Height (m):</label>
-                              <input
-                                type="number"
-                                value={waypoint.altitude}
-                                onChange={(e) => handleHeightChange(waypoint.id, parseInt(e.target.value))}
-                                className="w-20 px-2 py-1 border rounded"
-                                min="0"
-                                max="1000"
-                              />
-                            </div>
-                          </div>
-                        </Popup>
-                      </Marker>
-                    ))}
+                    <Lock className="w-5 h-5" />
+                    <span className="hidden sm:inline">{isMapLocked ? 'Unlock Map' : 'Lock Map'}</span>
+                  </button>
+                </div>
   
-                    {userLocation && (
-                      <Marker position={userLocation} icon={locationIcon}>
-                        <Popup>Your Location</Popup>
-                      </Marker>
-                    )}
-                  </MapContainer>
-  
-                  <div className="absolute top-4 right-4 z-[1000] space-y-2">
-                    <button
-                      onClick={() => setIsMapLocked(!isMapLocked)}
-                      className={`${
-                        isMapLocked ? 'bg-red-600 hover:bg-red-700' : 'bg-blue-600 hover:bg-blue-700'
-                      } text-white p-2 rounded-lg flex items-center gap-2 w-full`}
+                {missionCreationStep === 'selecting-waypoints' && (
+                  <div className="absolute top-4 left-4 z-[1000] bg-blue-600 text-white px-4 py-2 rounded-lg">
+                    <span className="hidden sm:inline">Click on map to add waypoints</span>
+                    <span className="sm:hidden">Add waypoints</span>
+                    ({waypoints.length} added)
+                    <button 
+                      onClick={handleWaypointsComplete}
+                      className="ml-4 bg-green-500 px-2 py-1 rounded"
                     >
-                      <Lock className="w-5 h-5" />
-                      <span className="hidden sm:inline">{isMapLocked ? 'Unlock Map' : 'Lock Map'}</span>
+                      Done
                     </button>
                   </div>
-  
-                  {missionCreationStep === 'selecting-waypoints' && (
-                    <div className="absolute top-4 left-4 z-[1000] bg-blue-600 text-white px-4 py-2 rounded-lg">
-                      <span className="hidden sm:inline">Click on map to add waypoints</span>
-                      <span className="sm:hidden">Add waypoints</span>
-                      ({waypoints.length} added)
-                      <button 
-                        onClick={handleWaypointsComplete}
-                        className="ml-4 bg-green-500 px-2 py-1 rounded"
-                      >
-                        Done
-                      </button>
-                    </div>
-                  )}
-                </div>
+                )}
               </div>
             </div>
+          </div>
   
-            <div className="lg:col-span-3 order-1 lg:order-2 space-y-4">
-              {missionCreationStep === 'idle' && (
-                <button
-                  onClick={handleNewMissionClick}
-                  className="w-full bg-blue-600 hover:bg-blue-700 text-white p-3 rounded-lg transition-colors flex items-center justify-center gap-2"
-                >
-                  <Route className="w-5 h-5" />
-                  Create New Mission
-                </button>
-              )}
+          <div className="lg:col-span-3 order-1 lg:order-2 space-y-4 overflow-y-auto">
+            {missionCreationStep === 'idle' && (
+              <button
+                onClick={handleNewMissionClick}
+                className="w-full bg-blue-600 hover:bg-blue-700 text-white p-3 rounded-lg transition-colors flex items-center justify-center gap-2"
+              >
+                <Route className="w-5 h-5" />
+                Create New Mission
+              </button>
+            )}
   
-              {showMissionForm && (
-                <div className="space-y-4">
-                  <div className="space-y-2">
-                    <h3 className="font-bold text-lg">Waypoints</h3>
-                    {waypoints.map((waypoint, index) => (
-                      <CoordinateInput
-                        key={waypoint.id}
-                        label={`Waypoint ${getWaypointLabel(index)}`}
-                        lat={waypoint.coordinates[0]}
-                        lng={waypoint.coordinates[1]}
-                        height={waypoint.altitude}
-                        action={waypoint.action}  // Pass the action
-                        onChange={(lat, lng, height, action) => handleCoordinateChange(waypoint.id, lat, lng, height, action)}
-                      />
-                    ))}
-                    {missionCreationStep === 'mission-details' && (
-                      <button
-                        onClick={handleWaypointSelectInForm}
-                        className="w-full bg-blue-600 hover:bg-blue-700 text-white p-2 rounded flex items-center justify-center gap-2"
-                      >
-                        <MapPin className="w-4 h-4" />
-                        {editingMissionId ? 'Edit Waypoints' : 'Select Waypoints'}
-                      </button>
-                    )}
-                  </div>
-  
-                  {missionCreationStep === 'mission-details' && (
-                    <MissionForm
-                      form={missionForm}
-                      waypointsCount={waypoints.length}
-                      onFormChange={setMissionForm}
-                      onWaypointSelect={handleWaypointSelectInForm}
-                      onCancel={() => {
-                        try {
-                          setShowMissionForm(false);
-                          setWaypoints([]);
-                          setIsSettingWaypoints(false);
-                          setMissionCreationStep('idle');
-                          setEditingMissionId(null);
-                          setIsMapLocked(true);
-                        } catch (error) {
-                          console.error('Cancel failed:', error);
+            {showMissionForm && (
+              <div className="space-y-4 bg-gray-900 p-4 rounded-lg">
+                <div className="space-y-2">
+                  <h3 className="font-bold text-lg">Waypoints</h3>
+                  {waypoints.map((waypoint, index) => (
+                    <CoordinateInput
+                      key={waypoint.id}
+                      label={`Waypoint ${index + 1}`}
+                      lat={waypoint.coordinates[0]}
+                      lng={waypoint.coordinates[1]}
+                      height={waypoint.altitude}
+                      action={waypoint.action}
+                      isFirstWaypoint={index === 0}
+                      onChange={(lat, lng, height, action) => 
+                        handleCoordinateChange(waypoint.id, lat, lng, height, action)
+                      }
+                      onDelete={() => {
+                        if (index !== 0) {
+                          handleWaypointDelete(waypoint.id);
                         }
                       }}
-                      onSubmit={handleMissionSubmit}
-                      isEditing={!!editingMissionId}
                     />
+                  ))}
+                  {missionCreationStep === 'mission-details' && (
+                    <button
+                      onClick={handleWaypointSelectInForm}
+                      className="w-full bg-blue-600 hover:bg-blue-700 text-white p-2 rounded flex items-center justify-center gap-2"
+                    >
+                      <MapPin className="w-4 h-4" />
+                      {editingMissionId ? 'Edit Waypoints' : 'Select Waypoints'}
+                    </button>
                   )}
                 </div>
-              )}
   
-              {missions && (
-                <div className="space-y-4">
-                  <h3 className="font-bold text-lg">Saved Missions</h3>
-                  {missions.map((mission) => (
-                    <div 
-                      key={mission.id} 
-                      className="bg-gray-800 rounded-lg p-4 space-y-2"
-                    >
-                      <div className="font-semibold text-white">{mission.name}</div>
-                      <div className="text-gray-400 text-sm">
-                        {mission.waypoints[0] && formatCoordinates(
-                          mission.waypoints[0].coordinates[0], 
-                          mission.waypoints[0].coordinates[1]
-                        )}
-                      </div>
-                      <div className="flex flex-wrap gap-2 pt-2">
-                        <button
-                          onClick={() => confirmAction(
-                            'start this mission',
-                            () => handleStartMission(mission.id)
-                          )}
-                          className="flex-1 min-w-[100px] flex items-center justify-center gap-2 bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded text-sm"
-                        >
-                          <Play className="w-4 h-4" />
-                          Start
-                        </button>
-                        <button
-                          onClick={() => confirmAction(
-                            'pause this mission',
-                            () => handlePauseMission(mission.id)
-                          )}
-                          className="flex-1 min-w-[100px] flex items-center justify-center gap-2 bg-yellow-600 hover:bg-yellow-700 text-white px-3 py-1.5 rounded text-sm"
-                        >
-                          <Pause className="w-4 h-4" />
-                          Pause
-                        </button>
-                        <button
-                          onClick={() => handleEditMission(mission)}
-                          className="flex-1 min-w-[100px] flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded text-sm"
-                        >
-                          <Edit2 className="w-4 h-4" />
-                          Edit
-                        </button>
-                        <button
-                          onClick={() => confirmAction(
-                            'delete this mission',
-                            () => handleDeleteMission(mission.id)
-                          )}
-                          className="flex-1 min-w-[100px] flex items-center justify-center gap-2 bg-red-600 hover:bg-red-700 text-white px-3 py-1.5 rounded text-sm"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                          Delete
-                        </button>
-                      </div>
+                {missionCreationStep === 'mission-details' && (
+                  <MissionForm
+                    form={missionForm}
+                    waypointsCount={waypoints.length}
+                    onFormChange={setMissionForm}
+                    onWaypointSelect={handleWaypointSelectInForm}
+                    onCancel={() => {
+                      try {
+                        setShowMissionForm(false);
+                        setWaypoints([]);
+                        setIsSettingWaypoints(false);
+                        setMissionCreationStep('idle');
+                        setEditingMissionId(null);
+                        setIsMapLocked(true);
+                      } catch (error) {
+                        console.error('Cancel failed:', error);
+                      }
+                    }}
+                    onSubmit={handleMissionSubmit}
+                    isEditing={!!editingMissionId}
+                  />
+                )}
+              </div>
+            )}
+  
+            {missions && (
+              <div className="space-y-4">
+                <h3 className="font-bold text-lg">Saved Missions</h3>
+                {missions.map((mission) => (
+                  <div 
+                    key={mission.id} 
+                    className="bg-gray-800 rounded-lg p-4 space-y-2"
+                  >
+                    <div className="font-semibold text-white">{mission.name}</div>
+                    <div className="text-gray-400 text-sm">
+                      {mission.waypoints[0] && formatCoordinates(
+                        mission.waypoints[0].coordinates[0], 
+                        mission.waypoints[0].coordinates[1]
+                      )}
                     </div>
-                  ))}
-                </div>
-              )}
-            </div>
+                    <div className="flex flex-wrap gap-2 pt-2">
+                      <button
+                        onClick={() => confirmAction(
+                          'start this mission',
+                          () => handleStartMission(mission.id)
+                        )}
+                        className="flex-1 min-w-[100px] flex items-center justify-center gap-2 bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded text-sm"
+                      >
+                        <Play className="w-4 h-4" />
+                        Start
+                      </button>
+                      <button
+                        onClick={() => confirmAction(
+                          'pause this mission',
+                          () => handlePauseMission(mission.id)
+                        )}
+                        className="flex-1 min-w-[100px] flex items-center justify-center gap-2 bg-yellow-600 hover:bg-yellow-700 text-white px-3 py-1.5 rounded text-sm"
+                      >
+                        <Pause className="w-4 h-4" />
+                        Pause
+                      </button>
+                      <button
+                        onClick={() => handleEditMission(mission)}
+                        className="flex-1 min-w-[100px] flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded text-sm"
+                      >
+                        <Edit2 className="w-4 h-4" />
+                        Edit
+                      </button>
+                      <button
+                        onClick={() => confirmAction(
+                          'delete this mission',
+                          () => handleDeleteMission(mission.id)
+                        )}
+                        className="flex-1 min-w-[100px] flex items-center justify-center gap-2 bg-red-600 hover:bg-red-700 text-white px-3 py-1.5 rounded text-sm"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </div>

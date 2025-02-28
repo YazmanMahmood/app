@@ -1,0 +1,130 @@
+.marker-pin {
+  width: 30px;
+  height: 30px;
+  border-radius: 50% 50% 50% 0;
+  position: relative;
+  transform: rotate(-45deg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
+  border: 2px solid white;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.marker-pin span {
+  transform: rotate(45deg);
+}
+
+.waypoint-popup .leaflet-popup-content {
+  margin: 0;
+  min-width: 200px;
+}
+
+.waypoint-popup button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  transition: all 0.2s;
+}
+
+.waypoint-popup button:hover {
+  background-color: #ef4444;
+  color: white;
+}
+
+.map-satellite .leaflet-popup-content-wrapper {
+  background: rgba(0, 0, 0, 0.9);
+  color: white;
+  backdrop-filter: blur(4px);
+}
+
+.map-satellite .leaflet-popup-tip {
+  background: rgba(0, 0, 0, 0.8);
+}
+
+.map-satellite .leaflet-control-layers {
+  background: rgba(0, 0, 0, 0.8);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  padding: 8px;
+}
+
+.map-satellite .leaflet-control-layers-toggle {
+  background-color: rgba(0, 0, 0, 0.8);
+  border-radius: 4px;
+}
+
+.waypoint-label {
+  position: absolute;
+  bottom: 42px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.8);
+  color: white;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  white-space: nowrap;
+  text-align: center;
+  pointer-events: none;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+.waypoint-label div {
+  line-height: 1.2;
+}
+
+.custom-div-icon {
+  position: relative;
+}
+
+/* Make labels more visible on satellite view */
+.map-satellite .waypoint-label {
+  text-shadow: 0 0 3px rgba(0, 0, 0, 0.8);
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.3);
+}
+
+/* Optional: Hide labels when zoomed out */
+.leaflet-zoom-animated .waypoint-label {
+  opacity: var(--waypoint-label-opacity, 1);
+  transition: opacity 0.2s;
+}
+
+/* Show labels only on hover for cleaner view */
+.custom-div-icon .waypoint-label {
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.custom-div-icon:hover .waypoint-label {
+  opacity: 1;
+}
+
+/* Update the dragging styles */
+.leaflet-marker-draggable {
+  cursor: grab;
+}
+
+.leaflet-marker-draggable:active {
+  cursor: grabbing;
+}
+
+.leaflet-marker-draggable .marker-pin:hover {
+  transform: rotate(-45deg) scale(1.1);
+  box-shadow: 0 0 15px rgba(0, 0, 0, 0.7);
+}
+
+.leaflet-marker-dragging .marker-pin {
+  transform: rotate(-45deg) scale(1.2);
+  box-shadow: 0 0 20px rgba(0, 0, 0, 0.8);
+}
+
+/* Improve the waypoint label visibility during drag */
+.leaflet-marker-dragging .waypoint-label {
+  opacity: 1 !important;
+  background: rgba(0, 0, 0, 0.9);
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
+} 
